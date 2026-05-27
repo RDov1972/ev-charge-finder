@@ -1,7 +1,13 @@
 const DEFAULT_CENTER = [52.3676, 4.9041];
 const DEFAULT_ZOOM = 13;
-const DEFAULT_RADIUS_KM = 8;
+const DEFAULT_RADIUS_KM = 1;
 const MAX_RESULTS = 160;
+const APP_VERSION = "2026.05.27.5";
+const OCM_API_KEY = "";
+const OVERPASS_ENDPOINTS = [
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+];
 
 const statusEl = document.getElementById("status");
 const searchForm = document.getElementById("search-form");
@@ -10,7 +16,10 @@ const radiusSelect = document.getElementById("radius-select");
 const useLocationBtn = document.getElementById("use-location-btn");
 const refreshBtn = document.getElementById("refresh-btn");
 const resultsList = document.getElementById("results-list");
+const installBtn = document.getElementById("install-btn");
+const openChromeBtn = document.getElementById("open-chrome-btn");
 const qrBtn = document.getElementById("qr-btn");
+const versionBadge = document.getElementById("version-badge");
 const qrDialog = document.getElementById("qr-dialog");
 const qrImage = document.getElementById("qr-image");
 const qrUrlEl = document.getElementById("qr-url");
@@ -19,9 +28,11 @@ const closeQrBtn = document.getElementById("close-qr-btn");
 const map = L.map("map", { zoomControl: false }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 L.control.zoom({ position: "bottomright" }).addTo(map);
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+  maxZoom: 20,
+  subdomains: "abcd",
+  attribution:
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; CARTO',
 }).addTo(map);
 
 const chargeLayer = L.layerGroup().addTo(map);
@@ -35,6 +46,7 @@ const centerMarker = L.circleMarker(DEFAULT_CENTER, {
 
 let userLocationMarker = null;
 let searchLocationMarker = null;
+let deferredInstallPrompt = null;
 
 const state = {
   lastCenter: { lat: DEFAULT_CENTER[0], lon: DEFAULT_CENTER[1] },
@@ -42,10 +54,47 @@ const state = {
   points: [],
   publicUsageTypeIds: null,
   loading: false,
+  dataSource: "osm",
 };
 
 function setStatus(message) {
   statusEl.textContent = message;
+}
+
+function hasOcmApiKey() {
+  return typeof OCM_API_KEY === "string" && OCM_API_KEY.trim().length > 0;
+}
+
+function isStandaloneMode() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function isChromeAndroidBrowser() {
+  const ua = navigator.userAgent || "";
+  return /Android/i.test(ua) && /Chrome/i.test(ua);
+}
+
+function updateInstallButton() {
+  if (!installBtn) return;
+  if (isStandaloneMode()) {
+    installBtn.hidden = true;
+    installBtn.disabled = true;
+    return;
+  }
+  installBtn.hidden = false;
+  installBtn.disabled = false;
+}
+
+function focusMapByRadius(lat, lon, radiusKm) {
+  const radiusMeters = Math.max(500, Math.round(radiusKm * 1000));
+  const bounds = L.circle([lat, lon], { radius: radiusMeters }).getBounds();
+  map.fitBounds(bounds, {
+    padding: [28, 28],
+    maxZoom: radiusKm <= 1 ? 16 : 15,
+  });
 }
 
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
@@ -148,6 +197,7 @@ function isPublicPoint(point) {
 }
 
 async function fetchReferenceData() {
+  if (!hasOcmApiKey()) return;
   try {
     const response = await fetchJsonWithTimeout(
       "https://api.openchargemap.io/v3/referencedata/?output=json",
@@ -170,6 +220,7 @@ async function fetchReferenceData() {
 }
 
 async function fetchOpenChargeMapPoints(lat, lon, radiusKm) {
+  if (!hasOcmApiKey()) return [];
   const params = new URLSearchParams({
     output: "json",
     latitude: String(lat),
@@ -180,10 +231,19 @@ async function fetchOpenChargeMapPoints(lat, lon, radiusKm) {
     compact: "true",
     verbose: "false",
     opendata: "true",
+    key: OCM_API_KEY.trim(),
   });
 
   const endpoint = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
-  const response = await fetchJsonWithTimeout(endpoint, {}, 12000);
+  const response = await fetchJsonWithTimeout(
+    endpoint,
+    {
+      headers: {
+        "X-API-Key": OCM_API_KEY.trim(),
+      },
+    },
+    12000
+  );
   if (!response.ok) {
     throw new Error(`Open Charge Map request failed (${response.status})`);
   }
@@ -225,46 +285,60 @@ async function fetchOverpassFallback(lat, lon, radiusKm) {
 );
 out center;
 `;
+  const errors = [];
 
-  const response = await fetchJsonWithTimeout(
-    "https://overpass-api.de/api/interpreter",
-    {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=UTF-8" },
-      body: query.trim(),
-    },
-    12000
-  );
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    const url = `${endpoint}?data=${encodeURIComponent(query.trim())}`;
+    try {
+      const response = await fetchJsonWithTimeout(
+        url,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+        },
+        12000
+      );
+      if (!response.ok) {
+        errors.push(`${endpoint} (${response.status})`);
+        continue;
+      }
 
-  if (!response.ok) {
-    throw new Error(`Overpass fallback failed (${response.status})`);
+      const data = await response.json();
+      const elements = Array.isArray(data?.elements) ? data.elements : [];
+      const mapped = elements
+        .map((item) => {
+          const latValue = item.lat ?? item.center?.lat;
+          const lonValue = item.lon ?? item.center?.lon;
+          if (typeof latValue !== "number" || typeof lonValue !== "number") return null;
+          const tags = item.tags || {};
+          return {
+            source: "overpass",
+            lat: latValue,
+            lon: lonValue,
+            title: tags.name || "Charging location",
+            address: [tags["addr:street"], tags["addr:housenumber"], tags["addr:city"]]
+              .filter(Boolean)
+              .join(" "),
+            status: tags.operational_status || "Status unknown",
+            usage: tags.access === "private" ? "Private" : "Public/unknown",
+            operator: tags.operator || "Unknown operator",
+            connectorSummary: tags.socket || tags.socket_type2 || "",
+            distanceKm: kmDistance(lat, lon, latValue, lonValue),
+          };
+        })
+        .filter(Boolean)
+        .filter((point) => point.usage !== "Private");
+
+      if (mapped.length > 0) return mapped;
+      errors.push(`${endpoint} (no results)`);
+    } catch (error) {
+      errors.push(`${endpoint} (${error.message})`);
+    }
   }
 
-  const data = await response.json();
-  const elements = Array.isArray(data?.elements) ? data.elements : [];
-  return elements
-    .map((item) => {
-      const latValue = item.lat ?? item.center?.lat;
-      const lonValue = item.lon ?? item.center?.lon;
-      if (typeof latValue !== "number" || typeof lonValue !== "number") return null;
-      const tags = item.tags || {};
-      return {
-        source: "overpass",
-        lat: latValue,
-        lon: lonValue,
-        title: tags.name || "Charging location",
-        address: [tags["addr:street"], tags["addr:housenumber"], tags["addr:city"]]
-          .filter(Boolean)
-          .join(" "),
-        status: tags.operational_status || "Status unknown",
-        usage: tags.access === "private" ? "Private" : "Public/unknown",
-        operator: tags.operator || "Unknown operator",
-        connectorSummary: tags.socket || tags.socket_type2 || "",
-        distanceKm: kmDistance(lat, lon, latValue, lonValue),
-      };
-    })
-    .filter(Boolean)
-    .filter((point) => point.usage !== "Private");
+  throw new Error(`Overpass unavailable: ${errors.join("; ")}`);
 }
 
 function clearPoints() {
@@ -296,7 +370,7 @@ function renderPoints(points) {
       <button type="button" class="result-btn">
         <strong>${escapeHtml(point.title)}</strong>
         <span>${escapeHtml(point.address || "Address unknown")}</span>
-        <span>${escapeHtml(point.status)} · ${point.distanceKm.toFixed(1)} km</span>
+        <span>${escapeHtml(point.status)} - ${point.distanceKm.toFixed(1)} km</span>
       </button>
     `;
     row.querySelector("button").addEventListener("click", () => {
@@ -315,15 +389,18 @@ async function refreshPoints(lat, lon, radiusKm) {
 
   let points = [];
   try {
-    points = await fetchOpenChargeMapPoints(lat, lon, radiusKm);
-    if (points.length === 0) {
-      setStatus("No points from primary source. Trying fallback...");
-      points = await fetchOverpassFallback(lat, lon, radiusKm);
+    points = await fetchOverpassFallback(lat, lon, radiusKm);
+    state.dataSource = "osm";
+    if (points.length === 0 && hasOcmApiKey()) {
+      setStatus("No points from OpenStreetMap source. Trying Open Charge Map...");
+      points = await fetchOpenChargeMapPoints(lat, lon, radiusKm);
+      state.dataSource = "ocm";
     }
     points.sort((a, b) => a.distanceKm - b.distanceKm);
     state.points = points;
     renderPoints(points);
-    setStatus(`Showing ${points.length} public points within ~${radiusKm} km.`);
+    const sourceLabel = state.dataSource === "ocm" ? "Open Charge Map" : "OpenStreetMap";
+    setStatus(`Showing ${points.length} public points within ~${radiusKm} km. Source: ${sourceLabel}.`);
   } catch (error) {
     clearPoints();
     setStatus(
@@ -362,9 +439,10 @@ async function searchLocation(query) {
   };
 }
 
-function setMapTarget(lat, lon, zoom = 14) {
-  map.setView([lat, lon], zoom);
+function setMapTarget(lat, lon, radiusKm = DEFAULT_RADIUS_KM) {
+  focusMapByRadius(lat, lon, radiusKm);
   state.lastCenter = { lat, lon };
+  state.lastRadiusKm = radiusKm;
   centerMarker.setLatLng([lat, lon]);
 }
 
@@ -396,8 +474,9 @@ async function useDeviceLocation() {
     async (position) => {
       const lat = position.coords.latitude;
       const lon = position.coords.longitude;
+      const radiusKm = Number(radiusSelect.value) || DEFAULT_RADIUS_KM;
       state.lastCenter = { lat, lon };
-      setMapTarget(lat, lon, 15);
+      setMapTarget(lat, lon, radiusKm);
       if (!userLocationMarker) {
         userLocationMarker = L.circle([lat, lon], {
           radius: 20,
@@ -410,7 +489,6 @@ async function useDeviceLocation() {
         userLocationMarker.setLatLng([lat, lon]);
       }
 
-      const radiusKm = Number(radiusSelect.value) || DEFAULT_RADIUS_KM;
       state.lastRadiusKm = radiusKm;
       await refreshPoints(lat, lon, radiusKm);
     },
@@ -434,7 +512,7 @@ searchForm.addEventListener("submit", async (event) => {
   setStatus("Searching location...");
   try {
     const found = await searchLocation(query);
-    setMapTarget(found.lat, found.lon, 14);
+    setMapTarget(found.lat, found.lon, radiusKm);
     state.lastRadiusKm = radiusKm;
     state.lastCenter = { lat: found.lat, lon: found.lon };
     if (!searchLocationMarker) {
@@ -463,6 +541,54 @@ refreshBtn.addEventListener("click", () => {
 
 qrBtn.addEventListener("click", showQr);
 closeQrBtn.addEventListener("click", closeQr);
+installBtn.addEventListener("click", async () => {
+  if (!deferredInstallPrompt || typeof deferredInstallPrompt.prompt !== "function") {
+    setStatus("Use Chrome menu -> Add to Home screen (or Install app).");
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  const choice = await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  updateInstallButton();
+  if (choice?.outcome === "accepted") {
+    setStatus("Install accepted. Check your home screen for the app icon.");
+  } else {
+    setStatus("Install canceled. You can still use menu -> Add to Home screen.");
+  }
+});
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  updateInstallButton();
+  setStatus("Install is ready. Tap Install app.");
+});
+
+window.addEventListener("appinstalled", () => {
+  deferredInstallPrompt = null;
+  updateInstallButton();
+  setStatus("App installed. Open it from your home screen.");
+});
+
+window.addEventListener("load", () => {
+  if (isStandaloneMode()) return;
+  if (!isChromeAndroidBrowser()) {
+    setStatus("Open this page in Google Chrome to install as an app.");
+    if (openChromeBtn) {
+      openChromeBtn.hidden = false;
+      openChromeBtn.disabled = false;
+    }
+  }
+});
+
+if (openChromeBtn) {
+  openChromeBtn.addEventListener("click", () => {
+    const current = window.location.href;
+    const cleanUrl = current.replace(/^https?:\/\//i, "");
+    const intentUrl = `intent://${cleanUrl}#Intent;scheme=https;package=com.android.chrome;end`;
+    window.location.href = intentUrl;
+  });
+}
 
 map.on("moveend", () => {
   const center = map.getCenter();
@@ -479,7 +605,9 @@ if ("serviceWorker" in navigator) {
 }
 
 async function init() {
-  setStatus("Loading app...");
+  if (versionBadge) versionBadge.textContent = `v${APP_VERSION}`;
+  updateInstallButton();
+  setStatus(`Loading app (v${APP_VERSION})...`);
   await fetchReferenceData();
   await refreshPoints(state.lastCenter.lat, state.lastCenter.lon, state.lastRadiusKm);
 }

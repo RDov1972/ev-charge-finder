@@ -6,22 +6,24 @@
   <title>EV Charge Finder</title>
   <meta name="description" content="Simple no-ads EV public charge-point map app for Android.">
   <meta name="theme-color" content="#0d9488">
-  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="manifest" href="manifest.webmanifest?v=20260527d">
+  <link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link
     rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+    onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';"
     crossorigin=""
   >
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260527d">
 </head>
 <body>
   <header class="app-header">
     <div class="title-wrap">
       <h1>EV Charge Finder</h1>
       <p class="subtitle">No ads. Simple map. Public charge points.</p>
+      <span id="version-badge" class="version-badge">v?</span>
     </div>
     <form id="search-form" class="search-form">
       <label class="field">
@@ -38,9 +40,10 @@
       <label class="field compact">
         <span>Radius</span>
         <select id="radius-select" name="radius">
+          <option value="1" selected>1 km</option>
           <option value="3">3 km</option>
           <option value="5">5 km</option>
-          <option value="8" selected>8 km</option>
+          <option value="8">8 km</option>
           <option value="15">15 km</option>
           <option value="25">25 km</option>
         </select>
@@ -53,8 +56,13 @@
     </form>
     <div class="status-row">
       <p id="status" aria-live="polite">Ready.</p>
+      <button id="install-btn" type="button" class="secondary">Install app</button>
+      <button id="open-chrome-btn" type="button" class="secondary" hidden>Open in Chrome</button>
       <button id="qr-btn" type="button" class="secondary">QR for phone</button>
     </div>
+    <p class="install-help" id="install-help">
+      QR opens the website only. For app install: open in <strong>Google Chrome</strong>, tap <strong>Install app</strong>, or menu -> Add to Home screen.
+    </p>
   </header>
 
   <main class="app-main">
@@ -77,15 +85,15 @@
 
   <footer class="app-footer">
     <small>
-      Data: Open Charge Map + OpenStreetMap. Availability can vary by operator/network.
+      Data: OpenStreetMap (charging stations). Availability can vary by operator/network.
     </small>
   </footer>
 
   <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+    onerror="this.onerror=null;this.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';"
     crossorigin=""
   ></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260527d"></script>
 </body>
 </html>
