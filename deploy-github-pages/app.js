@@ -2,7 +2,7 @@ const DEFAULT_CENTER = [52.3676, 4.9041];
 const DEFAULT_ZOOM = 13;
 const DEFAULT_RADIUS_KM = 1;
 const MAX_RESULTS = 160;
-const APP_VERSION = "2026.05.27.7";
+const APP_VERSION = "2026.05.27.8";
 const OCM_API_KEY = "";
 const OVERPASS_ENDPOINTS = [
   "https://overpass.private.coffee/api/interpreter",
@@ -158,10 +158,24 @@ function escapeHtml(value) {
 
 function getColorForStatus(statusText) {
   const text = (statusText || "").toLowerCase();
-  if (text.includes("operational")) return "#16a34a";
+  if (
+    text.includes("in use") ||
+    text.includes("occupied") ||
+    text.includes("busy") ||
+    text.includes("unavailable")
+  ) {
+    return "#dc2626";
+  }
+  if (
+    text.includes("free") ||
+    text.includes("available") ||
+    text.includes("operational") ||
+    text.includes("open")
+  ) {
+    return "#16a34a";
+  }
   if (text.includes("planned") || text.includes("future")) return "#f59e0b";
-  if (text.includes("in use")) return "#ef4444";
-  return "#334155";
+  return "#16a34a";
 }
 
 function buildPointPopup(point) {
@@ -434,10 +448,10 @@ function renderPoints(points) {
 
   for (const point of points) {
     const marker = L.circleMarker([point.lat, point.lon], {
-      radius: 7,
-      color: "#ffffff",
-      weight: 1,
-      fillOpacity: 0.95,
+      radius: 8,
+      color: "#0f172a",
+      weight: 1.2,
+      fillOpacity: 0.92,
       fillColor: getColorForStatus(point.status),
     }).addTo(chargeLayer);
     marker.bindPopup(buildPointPopup(point));
@@ -583,7 +597,11 @@ async function useDeviceLocation() {
         resolve(true);
       },
       (error) => {
-        setStatus(`Location permission failed: ${error.message}`);
+        if (error && error.code === 1) {
+          setStatus("Location blocked. In Android settings, allow Location permission for EV Charge Finder.");
+        } else {
+          setStatus(`Location permission failed: ${error.message}`);
+        }
         resolve(false);
       },
       {
@@ -629,6 +647,12 @@ refreshBtn.addEventListener("click", () => {
   state.lastCenter = { lat: center.lat, lon: center.lng };
   state.lastRadiusKm = radiusKm;
   void refreshPoints(center.lat, center.lng, radiusKm);
+});
+
+radiusSelect.addEventListener("change", () => {
+  const radiusKm = Number(radiusSelect.value) || DEFAULT_RADIUS_KM;
+  const center = map.getCenter();
+  focusMapByRadius(center.lat, center.lng, radiusKm);
 });
 
 qrBtn.addEventListener("click", showQr);

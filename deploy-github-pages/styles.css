@@ -143,7 +143,22 @@ button:hover {
   border: 1px solid var(--line);
   border-radius: 0.8rem;
   overflow: hidden;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+}
+
+.leaflet-control-layers {
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+}
+
+.leaflet-control-layers-toggle {
+  width: 38px;
+  height: 38px;
+}
+
+.leaflet-popup-content-wrapper {
+  border-radius: 10px;
 }
 
 .results-panel {
