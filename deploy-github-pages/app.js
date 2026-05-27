@@ -2,7 +2,7 @@ const DEFAULT_CENTER = [52.3676, 4.9041];
 const DEFAULT_ZOOM = 13;
 const DEFAULT_RADIUS_KM = 1;
 const MAX_RESULTS = 160;
-const APP_VERSION = "2026.05.27.5";
+const APP_VERSION = "2026.05.27.7";
 const OCM_API_KEY = "";
 const OVERPASS_ENDPOINTS = [
   "https://overpass.private.coffee/api/interpreter",
@@ -28,12 +28,32 @@ const closeQrBtn = document.getElementById("close-qr-btn");
 const map = L.map("map", { zoomControl: false }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 L.control.zoom({ position: "bottomright" }).addTo(map);
 
-L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+const modernTiles = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+  {
+    maxZoom: 20,
+    attribution: "Tiles &copy; Esri",
+  }
+);
+
+const cleanTiles = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
   maxZoom: 20,
   subdomains: "abcd",
   attribution:
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; CARTO',
-}).addTo(map);
+});
+
+modernTiles.addTo(map);
+L.control
+  .layers(
+    {
+      "Modern Streets": modernTiles,
+      "Clean Map": cleanTiles,
+    },
+    null,
+    { position: "topright", collapsed: true }
+  )
+  .addTo(map);
 
 const chargeLayer = L.layerGroup().addTo(map);
 const centerMarker = L.circleMarker(DEFAULT_CENTER, {
@@ -341,6 +361,64 @@ out center;
   throw new Error(`Overpass unavailable: ${errors.join("; ")}`);
 }
 
+function getBoundingBox(lat, lon, radiusKm) {
+  const latDelta = radiusKm / 111.32;
+  const lonDelta = radiusKm / (111.32 * Math.cos((lat * Math.PI) / 180));
+  return {
+    left: lon - lonDelta,
+    right: lon + lonDelta,
+    top: lat + latDelta,
+    bottom: lat - latDelta,
+  };
+}
+
+async function fetchNominatimChargingPoints(lat, lon, radiusKm) {
+  const box = getBoundingBox(lat, lon, radiusKm);
+  const params = new URLSearchParams({
+    q: "[charging station]",
+    format: "jsonv2",
+    bounded: "1",
+    limit: "50",
+    viewbox: `${box.left},${box.top},${box.right},${box.bottom}`,
+  });
+
+  const response = await fetchJsonWithTimeout(
+    `https://nominatim.openstreetmap.org/search?${params.toString()}`,
+    {
+      headers: {
+        Accept: "application/json",
+      },
+    },
+    12000
+  );
+
+  if (!response.ok) {
+    throw new Error(`Nominatim charging search failed (${response.status})`);
+  }
+
+  const data = await response.json();
+  const rows = Array.isArray(data) ? data : [];
+  return rows
+    .map((item) => {
+      const latValue = Number(item.lat);
+      const lonValue = Number(item.lon);
+      if (!Number.isFinite(latValue) || !Number.isFinite(lonValue)) return null;
+      return {
+        source: "nominatim",
+        lat: latValue,
+        lon: lonValue,
+        title: item.display_name?.split(",")[0] || "Charging location",
+        address: item.display_name || "Address unknown",
+        status: "Status unknown",
+        usage: "Public/unknown",
+        operator: "Unknown operator",
+        connectorSummary: "",
+        distanceKm: kmDistance(lat, lon, latValue, lonValue),
+      };
+    })
+    .filter(Boolean);
+}
+
 function clearPoints() {
   chargeLayer.clearLayers();
   resultsList.innerHTML = "";
@@ -391,6 +469,11 @@ async function refreshPoints(lat, lon, radiusKm) {
   try {
     points = await fetchOverpassFallback(lat, lon, radiusKm);
     state.dataSource = "osm";
+    if (points.length === 0) {
+      setStatus("No points from Overpass source. Trying Nominatim...");
+      points = await fetchNominatimChargingPoints(lat, lon, radiusKm);
+      state.dataSource = "nominatim";
+    }
     if (points.length === 0 && hasOcmApiKey()) {
       setStatus("No points from OpenStreetMap source. Trying Open Charge Map...");
       points = await fetchOpenChargeMapPoints(lat, lon, radiusKm);
@@ -399,7 +482,12 @@ async function refreshPoints(lat, lon, radiusKm) {
     points.sort((a, b) => a.distanceKm - b.distanceKm);
     state.points = points;
     renderPoints(points);
-    const sourceLabel = state.dataSource === "ocm" ? "Open Charge Map" : "OpenStreetMap";
+    const sourceLabel =
+      state.dataSource === "ocm"
+        ? "Open Charge Map"
+        : state.dataSource === "nominatim"
+          ? "OpenStreetMap (Nominatim)"
+          : "OpenStreetMap (Overpass)";
     setStatus(`Showing ${points.length} public points within ~${radiusKm} km. Source: ${sourceLabel}.`);
   } catch (error) {
     clearPoints();
@@ -466,41 +554,45 @@ function closeQr() {
 async function useDeviceLocation() {
   if (!navigator.geolocation) {
     setStatus("Geolocation is not supported on this browser.");
-    return;
+    return false;
   }
 
   setStatus("Getting your location...");
-  navigator.geolocation.getCurrentPosition(
-    async (position) => {
-      const lat = position.coords.latitude;
-      const lon = position.coords.longitude;
-      const radiusKm = Number(radiusSelect.value) || DEFAULT_RADIUS_KM;
-      state.lastCenter = { lat, lon };
-      setMapTarget(lat, lon, radiusKm);
-      if (!userLocationMarker) {
-        userLocationMarker = L.circle([lat, lon], {
-          radius: 20,
-          color: "#0ea5e9",
-          fillColor: "#7dd3fc",
-          fillOpacity: 0.25,
-          weight: 2,
-        }).addTo(map);
-      } else {
-        userLocationMarker.setLatLng([lat, lon]);
-      }
+  return await new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        const radiusKm = Number(radiusSelect.value) || DEFAULT_RADIUS_KM;
+        state.lastCenter = { lat, lon };
+        setMapTarget(lat, lon, radiusKm);
+        if (!userLocationMarker) {
+          userLocationMarker = L.circle([lat, lon], {
+            radius: 20,
+            color: "#0ea5e9",
+            fillColor: "#7dd3fc",
+            fillOpacity: 0.25,
+            weight: 2,
+          }).addTo(map);
+        } else {
+          userLocationMarker.setLatLng([lat, lon]);
+        }
 
-      state.lastRadiusKm = radiusKm;
-      await refreshPoints(lat, lon, radiusKm);
-    },
-    (error) => {
-      setStatus(`Location permission failed: ${error.message}`);
-    },
-    {
-      enableHighAccuracy: true,
-      timeout: 10000,
-      maximumAge: 60000,
-    }
-  );
+        state.lastRadiusKm = radiusKm;
+        await refreshPoints(lat, lon, radiusKm);
+        resolve(true);
+      },
+      (error) => {
+        setStatus(`Location permission failed: ${error.message}`);
+        resolve(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 60000,
+      }
+    );
+  });
 }
 
 searchForm.addEventListener("submit", async (event) => {
@@ -606,10 +698,14 @@ if ("serviceWorker" in navigator) {
 
 async function init() {
   if (versionBadge) versionBadge.textContent = `v${APP_VERSION}`;
+  if (radiusSelect) radiusSelect.value = String(DEFAULT_RADIUS_KM);
   updateInstallButton();
   setStatus(`Loading app (v${APP_VERSION})...`);
   await fetchReferenceData();
-  await refreshPoints(state.lastCenter.lat, state.lastCenter.lon, state.lastRadiusKm);
+  const gotLocation = await useDeviceLocation();
+  if (!gotLocation) {
+    await refreshPoints(state.lastCenter.lat, state.lastCenter.lon, state.lastRadiusKm);
+  }
 }
 
 void init();

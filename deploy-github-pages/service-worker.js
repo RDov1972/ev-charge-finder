@@ -1,14 +1,14 @@
-const CACHE_NAME = "ev-charge-finder-v4";
+const CACHE_NAME = "ev-charge-finder-v5";
 const APP_FILES = [
   "./",
   "./index.html",
-  "./index.html?v=20260527d",
+  "./index.html?v=20260527e",
   "./styles.css",
-  "./styles.css?v=20260527d",
+  "./styles.css?v=20260527e",
   "./app.js",
-  "./app.js?v=20260527d",
+  "./app.js?v=20260527e",
   "./manifest.webmanifest",
-  "./manifest.webmanifest?v=20260527d",
+  "./manifest.webmanifest?v=20260527e",
   "./icons/icon.svg",
   "./icons/icon-192.png",
   "./icons/icon-512.png",

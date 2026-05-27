@@ -1,9 +1,9 @@
 {
-  "id": "./index.html",
+  "id": "./index.html?app=v20260527e",
   "name": "EV Charge Finder",
   "short_name": "Charge Finder",
   "description": "Simple no-ads map app for public EV charge points.",
-  "start_url": "./index.html",
+  "start_url": "./index.html?app=v20260527e",
   "scope": "./",
   "display": "standalone",
   "background_color": "#f8fafc",
